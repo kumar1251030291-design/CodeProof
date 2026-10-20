@@ -1,0 +1,39 @@
+# Environment files and secrets (keep example templates)
+.env
+.env.*
+!.env.example
+
+# Python environments, bytecode, and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node dependencies and build outputs
+node_modules/
+dist/
+build/
+.vite/
+
+# Local caches, coverage, and logs
+.cache/
+.coverage
+*.log
+logs/
+.DS_Store
+coverage.xml
+htmlcov/
+backend/pytest-cache-files-*/
+
+# Local databases, backups, and candidate data (never commit real assessment data)
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.backup
+/local-data/
+/private-data/
+/candidate-submissions/

@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: codeproof-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health/database
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.3
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: SUPABASE_JWT_AUDIENCE
+        value: authenticated
+      - key: CORS_ORIGINS
+        value: '["https://codeproof-frontend.onrender.com"]'
+      - key: AI_PROVIDER
+        value: openai
+      - key: AI_MODEL
+        value: gpt-5-mini
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_TIMEOUT_SECONDS
+        value: "30"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+      - key: GEMINI_TIMEOUT_SECONDS
+        value: "25"
+      - key: CODE_EXECUTION_ENABLED
+        value: "false"
+
+  - type: web
+    name: codeproof-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
+      - key: VITE_API_BASE_URL
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
+        sync: false
