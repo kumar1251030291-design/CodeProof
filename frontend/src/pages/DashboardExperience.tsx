@@ -12,9 +12,12 @@ import {
   updateAssessmentDraft, fetchCandidateAssessment, fetchCandidateAssessments,
   fetchCandidateAttempts, startCandidateAttempt, verifyCandidateAccessCode,
   generateAssessmentQuestionDrafts,
+  generateFollowUpInterview, fetchFollowUpInterview, saveFollowUpAnswer, submitFollowUpInterview,
+  fetchEvaluatorFollowUpInterview, addEvaluatorFollowUpQuestion, reviewFollowUpInterview,
   type AssessmentDraftPayload, type AssessmentRecord, type AssessmentSummaryRecord,
   type CandidateAssessmentRecord, type CandidateAttemptRecord, type AssessmentResultsRecord,
   type EvaluationQuestionResultRecord, type AssessmentQuestionType,
+  type FollowUpInterviewRecord,
 } from '../services/api'
 import './DashboardExperience.css'
 import './EvaluatorResults.css'
@@ -151,6 +154,10 @@ function EvaluatorResultsPage({ accessToken }: { accessToken?: string }) {
   const [loadingResults, setLoadingResults] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [followUp, setFollowUp] = useState<FollowUpInterviewRecord | null>(null)
+  const [followUpPrompt, setFollowUpPrompt] = useState('')
+  const [followUpNotes, setFollowUpNotes] = useState('')
+  const [followUpScore, setFollowUpScore] = useState('')
 
   useEffect(() => {
     if (!accessToken) { setLoadingAssessments(false); return }
@@ -182,6 +189,12 @@ function EvaluatorResultsPage({ accessToken }: { accessToken?: string }) {
       || attempt.status.includes(term)
   })
   const selectedAttempt = results?.attempts.find(item => item.attempt_id === selectedAttemptId) ?? null
+  useEffect(() => {
+    if (!accessToken || !assessmentId || !selectedAttemptId) return
+    let active = true
+    fetchEvaluatorFollowUpInterview(accessToken, assessmentId, selectedAttemptId).then(value => { if (active) { setFollowUp(value); setFollowUpNotes(value.review_notes ?? ''); setFollowUpScore(value.review_score === null ? '' : String(value.review_score)) } }).catch(() => { if (active) setFollowUp(null) })
+    return () => { active = false }
+  }, [accessToken, assessmentId, selectedAttemptId])
   const saveReview = async (question: EvaluationQuestionResultRecord, score: number, feedback: string) => {
     if (!accessToken || !assessmentId || !selectedAttempt) return
     setNotice(''); setError('')
@@ -213,6 +226,7 @@ function EvaluatorResultsPage({ accessToken }: { accessToken?: string }) {
               {!selectedAttempt ? <div className="results-inline-empty">No submission selected.</div> : <>
                 <div className="score-summary"><span><small>Automatic</small><b>{selectedAttempt.score ?? '—'} / {selectedAttempt.max_score ?? '—'}</b></span><span><small>Manual</small><b>{selectedAttempt.manual_score ?? 'Pending'}</b></span><span><small>Final</small><b>{selectedAttempt.final_score ?? 'Pending'}</b></span><span><small>Review</small><b className={`review-badge ${selectedAttempt.review_status}`}>{selectedAttempt.review_status.replace('_', ' ')}</b></span></div>
                 <div className="results-question-list">{selectedAttempt.responses.map((question, index) => <ManualGradeCard key={question.question_id} index={index + 1} question={question} onSave={(score, feedback) => saveReview(question, score, feedback)} />)}</div>
+                <section className="follow-up-panel evaluator-follow-up"><h3>Technical follow-up interview</h3>{followUp ? <><p>Status: <b>{followUp.status.replace('_', ' ')}</b>{followUp.submitted_at && ` · submitted ${new Date(followUp.submitted_at).toLocaleString()}`}</p>{followUp.questions.map((item, index) => <div className="follow-up-question" key={item.id}><p><b>{index + 1}. {item.prompt}</b> <small>{item.origin === 'ai' ? 'AI generated' : `Evaluator authored${item.created_at ? ` · ${new Date(item.created_at).toLocaleString()}` : ''}`}</small></p><pre>{item.answer.trim() || 'Unanswered'}</pre></div>)}<form className="manual-grade-form" onSubmit={async event => { event.preventDefault(); if (!accessToken) return; try { setFollowUp(await reviewFollowUpInterview(accessToken, assessmentId, selectedAttempt.attempt_id, followUpNotes, followUpScore === '' ? null : Number(followUpScore))); setNotice('Interview review saved.') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save interview review.') } }}><label>Private evaluator notes<textarea maxLength={10000} rows={3} value={followUpNotes} onChange={event => setFollowUpNotes(event.target.value)} /></label><label>Separate interview score (optional, 0–100)<input type="number" min="0" max="100" value={followUpScore} onChange={event => setFollowUpScore(event.target.value)} /></label><button className="dash-primary" type="submit" disabled={followUp.status !== 'submitted'}><Save size={14} /> Save interview review</button></form><form className="manual-grade-form" onSubmit={async event => { event.preventDefault(); if (!accessToken || !followUpPrompt.trim()) return; try { setFollowUp(await addEvaluatorFollowUpQuestion(accessToken, assessmentId, selectedAttempt.attempt_id, followUpPrompt)); setFollowUpPrompt(''); setNotice('Additional question sent to the candidate.') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not add question.') } }}><label>Add a candidate question<textarea maxLength={4000} rows={2} value={followUpPrompt} onChange={event => setFollowUpPrompt(event.target.value)} /></label><button className="dash-secondary" type="submit" disabled={!followUpPrompt.trim()}>Add question</button></form></> : <p>Interview questions have not been generated for this submission yet.</p>}</section>
               </>}
             </section>
           </div>
@@ -372,7 +386,56 @@ function CandidateHistory({ accessToken, navigate }: { accessToken?: string; nav
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [accessToken])
-  return <><DashboardPageHeading eyebrow="YOUR ACTIVITY" title="Assessment history" detail="Only your own persisted attempts and saved responses are shown here." />{error && <p className="auth-error" role="alert">{error}</p>}{loading ? <section className="dash-panel large-empty-page" role="status"><span className="loader-dot" /> Loading attempt history?</section> : attempts.length ? <div className="candidate-assessment-list">{attempts.map(attempt => <article className="dash-panel candidate-assessment-card" key={attempt.id}><div><div className="dash-eyebrow">{attempt.status.toUpperCase()} ? ATTEMPT {attempt.attempt_number}</div><h3>{attempt.assessment_title}</h3><p>Started {new Date(attempt.started_at).toLocaleString()} ? {attempt.responses.length} response(s) saved</p></div><div className="candidate-attempt-actions">{attempt.status === 'in_progress' ? <button className="dash-primary" onClick={() => navigate(`/candidate/assessment/${attempt.assessment_id}/${attempt.id}`)}>Resume attempt <ArrowRight size={14} /></button> : <ReportDownloadButton accessToken={accessToken} kind="candidate" attemptId={attempt.id} />}</div></article>)}</div> : <section className="dash-panel large-empty-page"><span className="large-empty-icon"><History size={20} /></span><b>No attempts yet</b><p>Your started and submitted assessment attempts will appear here.</p></section>}</>
+  return <><DashboardPageHeading eyebrow="YOUR ACTIVITY" title="Assessment history" detail="Only your own persisted attempts and saved responses are shown here." />{error && <p className="auth-error" role="alert">{error}</p>}{loading ? <section className="dash-panel large-empty-page" role="status"><span className="loader-dot" /> Loading attempt history…</section> : attempts.length ? <div className="candidate-assessment-list">{attempts.map(attempt => <article className="dash-panel candidate-assessment-card" key={attempt.id}><div><div className="dash-eyebrow">{attempt.status.toUpperCase()} · ATTEMPT {attempt.attempt_number}</div><h3>{attempt.assessment_title}</h3><p>Started {new Date(attempt.started_at).toLocaleString()} · {attempt.responses.length} response(s) saved</p></div><div className="candidate-attempt-actions">{attempt.status === 'in_progress' ? <button className="dash-primary" onClick={() => navigate(`/candidate/assessment/${attempt.assessment_id}/${attempt.id}`)}>Resume attempt <ArrowRight size={14} /></button> : <ReportDownloadButton accessToken={accessToken} kind="candidate" attemptId={attempt.id} />}</div>{attempt.status === 'submitted' && <CandidateFollowUp accessToken={accessToken} attempt={attempt} />}</article>)}</div> : <section className="dash-panel large-empty-page"><span className="large-empty-icon"><History size={20} /></span><b>No attempts yet</b><p>Your started and submitted assessment attempts will appear here.</p></section>}</>
+}
+
+function CandidateFollowUp({ accessToken, attempt }: { accessToken?: string; attempt: CandidateAttemptRecord }) {
+  const [interview, setInterview] = useState<FollowUpInterviewRecord | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    if (!accessToken) return
+    let active = true
+    fetchFollowUpInterview(accessToken, attempt.id).then(value => { if (active) setInterview(value) }).catch(() => undefined).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [accessToken, attempt.id])
+  const generate = async () => {
+    if (!accessToken) return
+    setPending(true); setError(''); setNotice('')
+    try { setInterview(await generateFollowUpInterview(accessToken, attempt.id)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Questions could not be generated. Try again.') }
+    finally { setPending(false) }
+  }
+  const save = async (id: string, answer: string) => {
+    if (!accessToken) return
+    await saveFollowUpAnswer(accessToken, attempt.id, id, answer)
+    setNotice('Answer saved.')
+  }
+  const submit = async () => {
+    if (!accessToken) return
+    setPending(true); setError(''); setNotice('')
+    try { setInterview(await submitFollowUpInterview(accessToken, attempt.id)); setNotice('Interview submitted. Your coding assessment result is unchanged.') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Interview could not be submitted.') }
+    finally { setPending(false) }
+  }
+  return <section className="follow-up-panel" aria-label="Technical follow-up interview">
+    <h3>Technical follow-up interview</h3><p>Separate from your coding assessment score.</p>
+    {loading ? <p role="status">Loading interview…</p> : !interview ? <><p>Answer a few questions about your submitted solution. You can return here later.</p><button className="dash-primary" disabled={pending || !accessToken} onClick={() => void generate()}>{pending ? 'Preparing questions…' : 'Start follow-up interview'}</button></> : <>
+      <p>Interview status: <b>{interview.status.replace('_', ' ')}</b> · {interview.questions.filter(question => question.answer.trim()).length}/{interview.questions.length} answered</p>
+      {interview.questions.map((question, index) => <FollowUpAnswer key={question.id} question={question} index={index + 1} onSave={save} disabled={pending || interview.status === 'submitted' || interview.status === 'reviewed'} />)}
+      {interview.status !== 'submitted' && interview.status !== 'reviewed' && <button className="dash-primary" disabled={pending || interview.questions.some(question => !question.answer.trim())} onClick={() => void submit()}>{pending ? 'Submitting…' : 'Submit interview'}</button>}
+    </>}
+    {error && <p className="auth-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+  </section>
+}
+
+function FollowUpAnswer({ question, index, onSave, disabled }: { question: FollowUpInterviewRecord['questions'][number]; index: number; onSave: (id: string, answer: string) => Promise<void>; disabled: boolean }) {
+  const [answer, setAnswer] = useState(question.answer)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  return <div className="follow-up-question"><p><b>{index}. {question.prompt}</b> <small>{question.origin === 'ai' ? 'AI generated' : 'Evaluator question'}</small></p><label>Answer<textarea rows={3} maxLength={20000} value={answer} disabled={disabled || question.answer_locked} onChange={event => setAnswer(event.target.value)} /></label>{!disabled && !question.answer_locked && <button className="dash-secondary" disabled={saving} onClick={() => { setSaving(true); setError(''); void onSave(question.id, answer).catch(reason => setError(reason instanceof Error ? reason.message : 'Could not save answer.')).finally(() => setSaving(false)) }}>{saving ? 'Saving…' : 'Save answer'}</button>}{error && <p role="alert">{error}</p>}</div>
 }
 
 function EvaluatorDashboard({ navigate }: { navigate: (path: string) => void }) {

@@ -374,3 +374,49 @@ class AttemptResponse(Base):
         nullable=True,
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FollowUpInterview(Base):
+    """Private follow-up interview attached to exactly one submitted attempt."""
+
+    __tablename__ = "follow_up_interviews"
+    __table_args__ = (
+        UniqueConstraint("attempt_id", name="uq_follow_up_interviews_attempt"),
+        CheckConstraint("status IN ('pending', 'in_progress', 'submitted', 'reviewed')", name="follow_up_status_valid"),
+        CheckConstraint("review_score IS NULL OR review_score BETWEEN 0 AND 100", name="follow_up_score_valid"),
+        Index("ix_follow_up_candidate", "candidate_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    attempt_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("assessment_attempts.id", ondelete="CASCADE"), nullable=False)
+    assessment_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False)
+    candidate_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewer_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now())
+
+
+class FollowUpQuestion(Base):
+    """Candidate-facing generated or evaluator-authored follow-up question."""
+
+    __tablename__ = "follow_up_questions"
+    __table_args__ = (
+        CheckConstraint("origin IN ('ai', 'evaluator')", name="follow_up_origin_valid"),
+        CheckConstraint("length(trim(prompt)) > 0", name="follow_up_prompt_nonempty"),
+        CheckConstraint("length(answer) <= 20000", name="follow_up_answer_length"),
+        Index("ix_follow_up_question_interview", "interview_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    interview_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("follow_up_interviews.id", ondelete="CASCADE"), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    answer_locked: Mapped[bool] = mapped_column(nullable=False, default=False, server_default=sql_text("false"))
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now())

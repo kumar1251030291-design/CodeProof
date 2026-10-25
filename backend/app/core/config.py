@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.8-flash"
     gemini_timeout_seconds: int = 25
+    follow_up_question_count: int = Field(default=3, ge=1, le=5)
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",

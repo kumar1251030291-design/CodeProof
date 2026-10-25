@@ -231,6 +231,16 @@ export interface CandidateAttemptRecord {
   responses: CandidateAttemptResponseRecord[]
 }
 
+export interface FollowUpQuestionRecord {
+  id: string; prompt: string; origin: 'ai' | 'evaluator'; answer: string; answered_at: string | null;
+  answer_locked: boolean; created_at: string
+}
+export interface FollowUpInterviewRecord {
+  id: string; attempt_id: string; assessment_id: string; status: 'pending' | 'in_progress' | 'submitted' | 'reviewed';
+  submitted_at: string | null; reviewed_at: string | null; reviewer_id: string | null;
+  review_notes: string | null; review_score: number | null; questions: FollowUpQuestionRecord[]
+}
+
 export interface AssessmentDraftPayload {
   title: string
   description: string
@@ -479,6 +489,28 @@ export function saveCandidateResponse(accessToken: string, attemptId: string, qu
 
 export function submitCandidateAttempt(accessToken: string, attemptId: string): Promise<CandidateAttemptRecord> {
   return assessmentRequest(`${CANDIDATE_PATH}/attempts/${encodeURIComponent(attemptId)}/submit`, accessToken, { method: 'POST' })
+}
+
+export function generateFollowUpInterview(accessToken: string, attemptId: string): Promise<FollowUpInterviewRecord> {
+  return assessmentRequest(`${CANDIDATE_PATH}/attempts/${encodeURIComponent(attemptId)}/follow-up/generate`, accessToken, { method: 'POST' })
+}
+export function fetchFollowUpInterview(accessToken: string, attemptId: string): Promise<FollowUpInterviewRecord> {
+  return assessmentRequest(`${CANDIDATE_PATH}/attempts/${encodeURIComponent(attemptId)}/follow-up`, accessToken)
+}
+export function saveFollowUpAnswer(accessToken: string, attemptId: string, questionId: string, answer: string): Promise<{ id: string; answer: string; answered_at: string | null }> {
+  return assessmentRequest(`${CANDIDATE_PATH}/attempts/${encodeURIComponent(attemptId)}/follow-up/questions/${encodeURIComponent(questionId)}`, accessToken, { method: 'PUT', body: JSON.stringify({ answer }) })
+}
+export function submitFollowUpInterview(accessToken: string, attemptId: string): Promise<FollowUpInterviewRecord> {
+  return assessmentRequest(`${CANDIDATE_PATH}/attempts/${encodeURIComponent(attemptId)}/follow-up/submit`, accessToken, { method: 'POST' })
+}
+export function fetchEvaluatorFollowUpInterview(accessToken: string, assessmentId: string, attemptId: string): Promise<FollowUpInterviewRecord> {
+  return assessmentRequest(`${ASSESSMENTS_PATH}/${encodeURIComponent(assessmentId)}/attempts/${encodeURIComponent(attemptId)}/follow-up`, accessToken)
+}
+export function addEvaluatorFollowUpQuestion(accessToken: string, assessmentId: string, attemptId: string, prompt: string): Promise<FollowUpInterviewRecord> {
+  return assessmentRequest(`${ASSESSMENTS_PATH}/${encodeURIComponent(assessmentId)}/attempts/${encodeURIComponent(attemptId)}/follow-up/questions`, accessToken, { method: 'POST', body: JSON.stringify({ prompt }) })
+}
+export function reviewFollowUpInterview(accessToken: string, assessmentId: string, attemptId: string, notes: string, score: number | null): Promise<FollowUpInterviewRecord> {
+  return assessmentRequest(`${ASSESSMENTS_PATH}/${encodeURIComponent(assessmentId)}/attempts/${encodeURIComponent(attemptId)}/follow-up/review`, accessToken, { method: 'PATCH', body: JSON.stringify({ notes, score }) })
 }
 
 export function requestCandidateAssistance(

@@ -4,11 +4,12 @@ services:
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/v1/health/database
     envVars:
       - key: PYTHON_VERSION
-        value: 3.14.3
+        value: 3.14.8
       - key: DATABASE_URL
         sync: false
       - key: SUPABASE_URL
@@ -18,7 +19,7 @@ services:
       - key: SUPABASE_JWT_AUDIENCE
         value: authenticated
       - key: CORS_ORIGINS
-        value: '["https://codeproof-frontend.onrender.com"]'
+        sync: false
       - key: AI_PROVIDER
         value: openai
       - key: AI_MODEL
@@ -33,6 +34,8 @@ services:
         value: gemini-3.8-flash
       - key: GEMINI_TIMEOUT_SECONDS
         value: "25"
+      - key: FOLLOW_UP_QUESTION_COUNT
+        value: "3"
       - key: CODE_EXECUTION_ENABLED
         value: "false"
 

@@ -13,6 +13,7 @@ from app.api.assessments import router as assessments_router
 from app.api.ai_generation import router as ai_generation_router
 from app.api.candidate_assessments import router as candidate_assessments_router
 from app.api.candidate_ai import router as candidate_ai_router
+from app.api.follow_up_interviews import router as follow_up_interviews_router
 from app.core.config import settings
 from app.core.database import engine
 from app.core.auth import AuthenticatedIdentity, get_current_identity
@@ -36,6 +37,7 @@ app.add_middleware(
 app.include_router(assessments_router)
 app.include_router(candidate_assessments_router)
 app.include_router(candidate_ai_router)
+app.include_router(follow_up_interviews_router)
 app.include_router(ai_generation_router)
 
 
