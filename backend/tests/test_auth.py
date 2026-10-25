@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -48,6 +49,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
     monkeypatch.setattr(settings, "supabase_url", TEST_URL)
     monkeypatch.setattr(settings, "supabase_jwt_secret", TEST_SECRET)
     monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+    monkeypatch.setattr(settings, "evaluator_user_ids", set())
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -71,11 +73,14 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
 def make_token(
     user_id: UUID,
     *,
+    evaluator: bool = True,
     expires_in: timedelta = timedelta(minutes=5),
     secret: str = TEST_SECRET,
     issuer: str = f"{TEST_URL}/auth/v1",
     audience: str = "authenticated",
 ) -> str:
+    if evaluator:
+        settings.evaluator_user_ids.add(user_id)
     now = datetime.now(UTC)
     payload = {
         "sub": str(user_id),
@@ -101,6 +106,23 @@ def test_me_rejects_missing_malformed_and_expired_tokens(client: TestClient) -> 
     for token in (wrong_signature, wrong_issuer, wrong_audience):
         response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 401
+
+
+def test_me_rejects_tokens_with_non_uuid_subjects(client: TestClient) -> None:
+    invalid_subject = jwt.encode(
+        {
+            "sub": "not-a-valid-uuid",
+            "email": "candidate@example.test",
+            "aud": "authenticated",
+            "iss": f"{TEST_URL}/auth/v1",
+            "iat": int(datetime.now(UTC).timestamp()),
+            "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
+        },
+        TEST_SECRET,
+        algorithm="HS256",
+    )
+    response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {invalid_subject}"})
+    assert response.status_code == 401
 
 
 def test_auth_health_reports_only_safe_jwks_readiness(
@@ -160,42 +182,72 @@ def test_auth_health_fails_closed_when_jwks_unavailable(
     assert settings.supabase_url not in response.text
 
 
-def test_me_creates_profile_with_both_roles_and_is_idempotent(client: TestClient) -> None:
+def test_me_provisions_only_candidate_by_default_and_is_idempotent(client: TestClient) -> None:
     user_id = uuid4()
-    headers = {"Authorization": f"Bearer {make_token(user_id)}"}
+    headers = {"Authorization": f"Bearer {make_token(user_id, evaluator=False)}"}
     response = client.get("/api/v1/me", headers=headers)
 
     assert response.status_code == 200
     assert response.json()["profile"]["id"] == str(user_id)
-    assert response.json()["roles"] == ["candidate", "evaluator"]
+    assert response.json()["roles"] == ["candidate"]
     assert response.json()["access_state"] == "authorized"
 
     repeated = client.get("/api/v1/me", headers=headers)
     assert repeated.status_code == 200
-    assert repeated.json()["roles"] == ["candidate", "evaluator"]
+    assert repeated.json()["roles"] == ["candidate"]
 
     db_generator = main.app.dependency_overrides[get_db_session]()
     session = next(db_generator)
     try:
-        assert session.query(UserRole).filter_by(user_id=user_id).count() == 2
+        assert session.query(UserRole).filter_by(user_id=user_id).count() == 1
     finally:
         db_generator.close()
 
 
-def test_existing_profile_is_completed_to_both_roles(client: TestClient) -> None:
+def test_existing_backfilled_evaluator_role_is_not_trusted_without_allowlist(client: TestClient) -> None:
     user_id = uuid4()
     db_generator = main.app.dependency_overrides[get_db_session]()
     session = next(db_generator)
     try:
         session.add(UserProfile(id=user_id))
         session.add(UserRole(user_id=user_id, role="candidate"))
+        session.add(UserRole(user_id=user_id, role="evaluator"))
         session.commit()
     finally:
         db_generator.close()
 
-    response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {make_token(user_id)}"})
+    response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {make_token(user_id, evaluator=False)}"})
+    assert response.status_code == 200
+    assert response.json()["roles"] == ["candidate"]
+
+
+def test_allowlisted_supabase_uuid_receives_evaluator_role(client: TestClient) -> None:
+    user_id = uuid4()
+    settings.evaluator_user_ids.add(user_id)
+    response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {make_token(user_id, evaluator=False)}"})
     assert response.status_code == 200
     assert response.json()["roles"] == ["candidate", "evaluator"]
+
+
+def test_me_reports_actionable_database_error_without_driver_details(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_get = Session.get
+
+    def missing_schema(self, entity, ident, *args, **kwargs):
+        if entity is UserProfile:
+            raise OperationalError("profile query", {}, RuntimeError("private db password detail"))
+        return original_get(self, entity, ident, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "get", missing_schema)
+    response = client.get(
+        "/api/v1/me",
+        headers={"Authorization": f"Bearer {make_token(uuid4(), evaluator=False)}"},
+    )
+    assert response.status_code == 503
+    assert "DATABASE_URL" not in response.text
+    assert "private db password detail" not in response.text
+    assert "Alembic migrations" in response.json()["detail"]
 
 
 def test_es256_token_uses_cached_jwks_verification_path(
@@ -232,7 +284,7 @@ def test_es256_token_uses_cached_jwks_verification_path(
     response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.json()["profile"]["id"] == str(user_id)
-    assert response.json()["roles"] == ["candidate", "evaluator"]
+    assert response.json()["roles"] == ["candidate"]
     assert response.json()["access_state"] == "authorized"
 
 
@@ -301,13 +353,13 @@ def test_evaluator_foundation_rejects_identity_without_evaluator_role() -> None:
 
 def test_authenticated_user_cannot_assign_roles_through_public_api(client: TestClient) -> None:
     user_id = uuid4()
-    headers = {"Authorization": f"Bearer {make_token(user_id)}"}
+    headers = {"Authorization": f"Bearer {make_token(user_id, evaluator=False)}"}
     response = client.post("/api/v1/me/roles", headers=headers, json={"role": "evaluator"})
 
     assert response.status_code == 404
     me = client.get("/api/v1/me", headers=headers)
     assert me.status_code == 200
-    assert me.json()["roles"] == ["candidate", "evaluator"]
+    assert me.json()["roles"] == ["candidate"]
     assert me.json()["access_state"] == "authorized"
 
 
@@ -331,6 +383,15 @@ def test_health_routes_remain_public(client: TestClient, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(main, "engine", FakeEngine())
     assert client.get("/api/v1/health/database").status_code == 200
+
+    class BrokenEngine:
+        def connect(self):
+            raise OperationalError("health query", {}, RuntimeError("private connection detail"))
+
+    monkeypatch.setattr(main, "engine", BrokenEngine())
+    unavailable = client.get("/api/v1/health/database")
+    assert unavailable.status_code == 503
+    assert "private connection detail" not in unavailable.text
 
 
 def draft_payload(*, title: str = "API Assessment", access_mode: str = "open") -> dict[str, object]:

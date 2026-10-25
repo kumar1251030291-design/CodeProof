@@ -61,6 +61,7 @@ def candidate_ai_client(
     monkeypatch.setattr(settings, "supabase_url", TEST_URL)
     monkeypatch.setattr(settings, "supabase_jwt_secret", TEST_SECRET)
     monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+    monkeypatch.setattr(settings, "evaluator_user_ids", set())
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)

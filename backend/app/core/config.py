@@ -1,9 +1,10 @@
 """Environment-based application settings."""
 
 from pathlib import Path
+from uuid import UUID
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -17,9 +18,12 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
     ]
     database_url: str | None = None
+    database_connect_timeout_seconds: int = Field(default=5, ge=1, le=30)
+    database_pool_timeout_seconds: int = Field(default=5, ge=1, le=30)
     supabase_url: str | None = None
     supabase_jwt_secret: str | None = None
     supabase_jwt_audience: str = "authenticated"
+    evaluator_user_ids: set[UUID] = Field(default_factory=set)
     code_execution_enabled: bool = False
     code_runner_image: str = "codeproof-runner:local"
     code_runner_timeout_seconds: int = 8

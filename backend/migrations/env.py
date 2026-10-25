@@ -4,6 +4,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import JSON
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.engine import Connection
 
 from app.core.config import settings
@@ -71,8 +72,13 @@ def run_migrations_online() -> None:
         with context.begin_transaction():
             context.run_migrations()
 
-    with engine.connect() as connection:
-        configure_connection(connection)
+    try:
+        with engine.connect() as connection:
+            configure_connection(connection)
+    except SQLAlchemyError:
+        raise RuntimeError(
+            "Alembic could not connect to or query the configured database. Check the DATABASE_URL target, DNS/network, SSL settings, and migration state."
+        ) from None
 
 
 if context.is_offline_mode():

@@ -9,10 +9,12 @@ import {
 } from 'lucide-react'
 import {
   ApiError, fetchCurrentUser, fetchHealth, fetchCandidateAssessment, fetchCandidateAttempt,
+  withTimeout,
   requestCandidateAssistance, saveCandidateResponse, submitCandidateAttempt,
   type ApplicationRole, type CurrentUserResponse, type CandidateAssessmentRecord,
   type CandidateAssistantTurn, type CandidateAttemptRecord, type CandidateQuestionRecord,
 } from './services/api'
+import { accessVerificationFailure } from './services/request'
 import { supabase, supabaseConfigError } from './services/supabase'
 import type { Session } from '@supabase/supabase-js'
 import { DashboardExperience } from './pages/DashboardExperience'
@@ -121,7 +123,11 @@ function App() {
           result = await fetchCurrentUser(token)
         } catch (error) {
           if (!(error instanceof ApiError) || error.status !== 401 || !supabase) throw error
-          const refreshed = await supabase.auth.refreshSession()
+          const refreshed = await withTimeout(
+            supabase.auth.refreshSession(),
+            10_000,
+            'Supabase session refresh timed out. Check your connection and retry verification.',
+          )
           if (refreshed.error || !refreshed.data.session) {
             if (sequence === identitySequence.current) {
               setIdentityStatus('expired')
@@ -138,8 +144,9 @@ function App() {
       } catch (error) {
         if (sequence !== identitySequence.current) return
         setIdentity(null)
-        setIdentityStatus(error instanceof ApiError && error.status === 401 ? 'expired' : 'unavailable')
-        setIdentityError(error instanceof Error ? error.message : 'Could not verify your CodeProof access.')
+        const failure = accessVerificationFailure(error)
+        setIdentityStatus(failure.status)
+        setIdentityError(failure.message)
       }
     })()
     identityRequest.current = { token, promise: request }

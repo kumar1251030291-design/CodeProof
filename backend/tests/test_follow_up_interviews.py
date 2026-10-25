@@ -28,6 +28,7 @@ def interview_client(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestCli
     monkeypatch.setattr(settings, "supabase_url", TEST_URL)
     monkeypatch.setattr(settings, "supabase_jwt_secret", TEST_SECRET)
     monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+    monkeypatch.setattr(settings, "evaluator_user_ids", set())
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -46,18 +47,23 @@ def interview_client(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestCli
     engine.dispose()
 
 
-def token(user_id: UUID) -> str:
+def token(user_id: UUID, *, evaluator: bool = False) -> str:
+    if evaluator:
+        settings.evaluator_user_ids.add(user_id)
     now = datetime.now(UTC)
     return jwt.encode({"sub": str(user_id), "aud": "authenticated", "iss": f"{TEST_URL}/auth/v1", "iat": int(now.timestamp()), "exp": int((now + timedelta(minutes=5)).timestamp())}, TEST_SECRET, algorithm="HS256")
 
 
-def create_submitted_attempt(factory: sessionmaker[Session], owner_id: UUID) -> UUID:
+def create_submitted_attempt(factory: sessionmaker[Session], candidate_id: UUID, *, owner_id: UUID | None = None) -> UUID:
     assessment_id, attempt_id, question_id = uuid4(), uuid4(), uuid4()
+    owner_id = owner_id or candidate_id
     with factory() as session:
-        session.add(UserProfile(id=owner_id))
+        session.add(UserProfile(id=candidate_id))
+        if owner_id != candidate_id:
+            session.add(UserProfile(id=owner_id))
         session.add(Assessment(id=assessment_id, title="Arrays", description="", instructions="", status="published", access_mode="public", owner_id=owner_id))
         session.add(Question(id=question_id, assessment_id=assessment_id, title="Pairs", prompt="Find a pair summing to the target.", question_type="programming", difficulty="easy", points=10, default_language="python", allowed_languages=["python"], time_limit_seconds=600, display_order=0, problem_statement="Find a pair."))
-        session.add(AssessmentAttempt(id=attempt_id, candidate_id=owner_id, assessment_id=assessment_id, attempt_number=1, deadline_at=datetime.now(UTC), status="submitted", submitted_at=datetime.now(UTC), score=5, max_score=10))
+        session.add(AssessmentAttempt(id=attempt_id, candidate_id=candidate_id, assessment_id=assessment_id, attempt_number=1, deadline_at=datetime.now(UTC), status="submitted", submitted_at=datetime.now(UTC), score=5, max_score=10))
         session.flush()
         session.add(AttemptResponse(attempt_id=attempt_id, question_id=question_id, response_text="def solve(): return []", programming_language="python", execution_status="unavailable"))
         session.commit()
@@ -95,11 +101,11 @@ def test_generate_retry_resume_and_finalize_are_idempotent_and_do_not_change_sco
 def test_candidate_and_evaluator_scope_and_private_notes(interview_client, monkeypatch: pytest.MonkeyPatch) -> None:
     client, factory = interview_client
     candidate_id, other_id, evaluator_id = uuid4(), uuid4(), uuid4()
-    attempt_id = create_submitted_attempt(factory, candidate_id)
+    attempt_id = create_submitted_attempt(factory, candidate_id, owner_id=evaluator_id)
     monkeypatch.setattr("app.api.follow_up_interviews._generate_questions", lambda _payload: ["Explain the trade-off."])
     candidate_headers = {"Authorization": f"Bearer {token(candidate_id)}"}
-    other_headers = {"Authorization": f"Bearer {token(other_id)}"}
-    evaluator_headers = {"Authorization": f"Bearer {token(evaluator_id)}"}
+    other_headers = {"Authorization": f"Bearer {token(other_id, evaluator=True)}"}
+    evaluator_headers = {"Authorization": f"Bearer {token(evaluator_id, evaluator=True)}"}
     candidate_path = f"/api/v1/candidate/attempts/{attempt_id}/follow-up"
     assert client.post(candidate_path + "/generate", headers=candidate_headers).status_code == 200
     assert client.get(candidate_path, headers=other_headers).status_code == 404
@@ -107,26 +113,27 @@ def test_candidate_and_evaluator_scope_and_private_notes(interview_client, monke
     assert client.get(evaluator_path, headers=evaluator_headers).status_code == 404
     owned_id = assessment_id(factory, attempt_id)
     evaluator_path = f"/api/v1/evaluator/assessments/{owned_id}/attempts/{attempt_id}/follow-up"
-    assert client.get(evaluator_path, headers=candidate_headers).status_code == 200
+    assert client.get(evaluator_path, headers=candidate_headers).status_code == 403
+    assert client.get(evaluator_path, headers=evaluator_headers).status_code == 200
     interview = client.get(candidate_path, headers=candidate_headers).json()
     client.put(f"{candidate_path}/questions/{interview['questions'][0]['id']}", headers=candidate_headers, json={"answer": "Discuss trade-offs."})
     assert client.post(candidate_path + "/submit", headers=candidate_headers).status_code == 200
     review_path = evaluator_path + "/review"
-    reviewed = client.patch(review_path, headers=candidate_headers, json={"notes": "Private assessment note", "score": 4})
+    reviewed = client.patch(review_path, headers=evaluator_headers, json={"notes": "Private assessment note", "score": 4})
     assert reviewed.status_code == 200
     assert reviewed.json()["review_notes"] == "Private assessment note"
     candidate_view = client.get(candidate_path, headers=candidate_headers).json()
     assert candidate_view["review_notes"] is None and candidate_view["review_score"] is None
     assert candidate_view["reviewer_id"] is None and candidate_view["reviewed_at"] is None
-    assert client.get(evaluator_path, headers=evaluator_headers).status_code == 404
-    added = client.post(evaluator_path + "/questions", headers=candidate_headers, json={"prompt": "What alternative would you test?"})
+    assert client.get(evaluator_path, headers=other_headers).status_code == 404
+    added = client.post(evaluator_path + "/questions", headers=evaluator_headers, json={"prompt": "What alternative would you test?"})
     assert added.status_code == 200
     extra = added.json()["questions"][-1]
     assert extra["origin"] == "evaluator"
     assert extra["answer_locked"] is False
     assert client.put(f"{candidate_path}/questions/{extra['id']}", headers=candidate_headers, json={"answer": "Compare a sorting approach."}).status_code == 200
     assert client.post(candidate_path + "/submit", headers=candidate_headers).status_code == 200
-    assert client.get(evaluator_path, headers=candidate_headers).json()["questions"][-1]["answer"] == "Compare a sorting approach."
+    assert client.get(evaluator_path, headers=evaluator_headers).json()["questions"][-1]["answer"] == "Compare a sorting approach."
     # Interview grading remains separate from the coding score.
     with factory() as session:
         interview = session.scalar(select(FollowUpInterview).where(FollowUpInterview.attempt_id == attempt_id))

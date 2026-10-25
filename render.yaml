@@ -12,6 +12,12 @@ services:
         value: 3.14.8
       - key: DATABASE_URL
         sync: false
+      - key: DATABASE_CONNECT_TIMEOUT_SECONDS
+        value: "5"
+      - key: DATABASE_POOL_TIMEOUT_SECONDS
+        value: "5"
+      - key: EVALUATOR_USER_IDS
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_JWT_SECRET

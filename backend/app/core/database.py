@@ -19,7 +19,9 @@ SessionLocal: sessionmaker[Session] | None = None
 if settings.database_url:
     engine = create_engine(
         settings.database_url,
+        connect_args={"connect_timeout": settings.database_connect_timeout_seconds},
         pool_pre_ping=True,
+        pool_timeout=settings.database_pool_timeout_seconds,
         hide_parameters=True,
     )
     SessionLocal = sessionmaker(

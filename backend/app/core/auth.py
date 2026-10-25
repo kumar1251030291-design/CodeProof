@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db_session
 from app.core.security import (
     AuthenticationConfigurationError,
@@ -20,7 +21,7 @@ from app.core.security import (
 from app.models import UserProfile, UserRole
 
 bearer_scheme = HTTPBearer(auto_error=False)
-DEFAULT_USER_ROLES = ("candidate", "evaluator")
+DEFAULT_USER_ROLES = ("candidate",)
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,12 @@ def get_current_identity(
 ) -> AuthenticatedIdentity:
     """Safely load or create the verified token subject's UUID profile."""
 
-    user_id = UUID(claims["sub"])
+    sub = claims.get("sub")
+    try:
+        user_id = UUID(sub)
+    except (TypeError, ValueError, AttributeError):
+        raise _unauthorized() from None
+
     try:
         profile = session.get(UserProfile, user_id)
         if profile is None:
@@ -90,10 +96,10 @@ def get_current_identity(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="User profile is unavailable",
             )
-        # Every authenticated profile receives both roles from trusted backend
-        # provisioning. Composite PKs make retries idempotent; savepoints let
-        # concurrent requests safely race to insert the same assignment.
-        for role in DEFAULT_USER_ROLES:
+        # Candidate is the least-privilege default. Evaluator access is granted
+        # only to IDs explicitly provisioned by backend configuration.
+        roles_to_grant = DEFAULT_USER_ROLES + (("evaluator",) if user_id in settings.evaluator_user_ids else ())
+        for role in roles_to_grant:
             if session.get(UserRole, (user_id, role)) is not None:
                 continue
             try:
@@ -105,14 +111,18 @@ def get_current_identity(
                 if session.get(UserRole, (user_id, role)) is None:
                     raise
         session.commit()
+        stored_roles = session.scalars(select(UserRole.role).where(UserRole.user_id == user_id)).all()
+        # Older migrations backfilled evaluator for every user. Keep those rows
+        # untouched, but do not treat them as authority unless allowlisted.
         roles = tuple(
-            session.scalars(select(UserRole.role).where(UserRole.user_id == user_id)).all()
+            role for role in stored_roles
+            if role != "evaluator" or user_id in settings.evaluator_user_ids
         )
     except SQLAlchemyError:
         session.rollback()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="User profile is unavailable",
+            detail="Profile storage is unavailable. Check the backend database target and apply the reviewed Alembic migrations to that database.",
         ) from None
 
     email = claims.get("email")

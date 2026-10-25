@@ -1,6 +1,6 @@
 # CodeProof production deployment
 
-This deploys the existing Vite frontend to Vercel and the existing FastAPI backend to Render. Use the existing Supabase project and database. Do not enable candidate code execution in the public API service.
+This deploys the existing Vite frontend to Vercel and the existing FastAPI backend to Render. Keep the Supabase Auth project and PostgreSQL target explicit: the local `.env` may point at local Postgres, so verify the intended production `DATABASE_URL` host and project before migration or deployment. Do not enable candidate code execution in the public API service. See [AUTH_DATABASE_DIAGNOSTIC.md](AUTH_DATABASE_DIAGNOSTIC.md).
 
 ## Required production settings
 
@@ -9,6 +9,9 @@ Configure values in the hosting provider dashboards; do not put secrets in this 
 ### Render backend
 
 - `DATABASE_URL`: the existing production PostgreSQL connection URL.
+- `DATABASE_CONNECT_TIMEOUT_SECONDS`: normally `5`.
+- `DATABASE_POOL_TIMEOUT_SECONDS`: normally `5`.
+- `EVALUATOR_USER_IDS`: JSON array of Supabase Auth user UUIDs approved for evaluator access. Leave empty when no evaluator is provisioned.
 - `SUPABASE_URL`: existing Supabase project URL.
 - `SUPABASE_JWT_AUDIENCE`: `authenticated`.
 - `SUPABASE_JWT_SECRET`: only if the project uses legacy HS256 JWTs; leave unset for JWKS verification.
@@ -42,7 +45,7 @@ The frontend uses only public Supabase configuration. Never add an AI credential
 1. Create a Blueprint from the reviewed repository using `render.yaml`, or create the backend web service manually with root directory `backend`.
 2. The backend build command is `pip install -r requirements.txt`; the start command is `uvicorn app.main:app --host 0.0.0.0 --port $PORT`. The health check is `/api/v1/health/database`.
 3. Set the production environment variables listed above in the Render dashboard. Set `CORS_ORIGINS` after Vercel assigns its URL. Keep `CODE_EXECUTION_ENABLED=false`.
-4. Confirm the service points to the existing Supabase/PostgreSQL project. Do not create or reset a database as part of deployment.
+4. Confirm the service points to the explicitly approved PostgreSQL host/database and Supabase Auth project. Do not create or reset a database as part of deployment.
 5. `render.yaml` runs `alembic upgrade head` as a pre-deploy step. Confirm the Render service can reach the existing database and take the provider's normal database backup before deploying a schema change.
 6. Wait for the database health check to pass, then copy the assigned Render service origin into Vercel's `VITE_API_BASE_URL` and redeploy the frontend.
 

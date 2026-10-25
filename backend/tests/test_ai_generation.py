@@ -46,6 +46,7 @@ def ai_client(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, se
     monkeypatch.setattr(settings, "supabase_url", TEST_URL)
     monkeypatch.setattr(settings, "supabase_jwt_secret", TEST_SECRET)
     monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+    monkeypatch.setattr(settings, "evaluator_user_ids", set())
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -66,6 +67,7 @@ def ai_client(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, se
 
 
 def token(user_id: UUID) -> str:
+    settings.evaluator_user_ids.add(user_id)
     now = datetime.now(UTC)
     return jwt.encode(
         {

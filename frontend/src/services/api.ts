@@ -1,3 +1,6 @@
+import { ApiError, API_REQUEST_TIMEOUT_MS, fetchWithTimeout, withTimeout } from './request'
+export { ApiError, withTimeout } from './request'
+
 export interface HealthResponse {
   status: string
 }
@@ -278,63 +281,61 @@ export interface AssessmentDraftPayload {
   }>
 }
 
-export class ApiError extends Error {
-  readonly status?: number
-
-  constructor(message: string, status?: number) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
-  }
-}
-
 const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 ).replace(/\/+$/, '')
+async function readJson<T>(response: Response): Promise<T> {
+  return withTimeout(
+    response.json() as Promise<T>,
+    API_REQUEST_TIMEOUT_MS,
+    'CodeProof API returned an incomplete response. Retry the request or check the backend logs.',
+  )
+}
 
 export async function fetchHealth(): Promise<HealthResponse> {
   let response: Response
 
   try {
-    response = await fetch(`${API_BASE_URL}/health`)
+    response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/health/database`)
   } catch (error) {
-    const detail = error instanceof Error ? `: ${error.message}` : ''
-    throw new ApiError(`Unable to reach the CodeProof API${detail}`)
+    if (error instanceof ApiError) throw error
+    throw new ApiError('Unable to reach the CodeProof API. Confirm that the backend is running and VITE_API_BASE_URL points to it.')
   }
 
   if (!response.ok) {
     throw new ApiError(`CodeProof API returned HTTP ${response.status}`, response.status)
   }
 
-  return (await response.json()) as HealthResponse
+  return readJson<HealthResponse>(response)
 }
 
 export async function fetchCurrentUser(accessToken: string): Promise<CurrentUserResponse> {
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}/api/v1/me`, {
+    response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/me`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
-  } catch {
-    throw new ApiError('Unable to reach the CodeProof API')
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    throw new ApiError('Unable to reach the CodeProof API. Confirm that the backend is running and VITE_API_BASE_URL points to it.')
   }
 
   if (!response.ok) {
-    throw new ApiError(
-      response.status === 401
-        ? 'Your session could not be verified.'
-        : `CodeProof API returned HTTP ${response.status}`,
-      response.status,
-    )
+    let detail = response.status === 401 ? 'Your session could not be verified.' : `CodeProof API returned HTTP ${response.status}`
+    try {
+      const body = await readJson<{ detail?: unknown }>(response)
+      if (typeof body.detail === 'string') detail = body.detail
+    } catch { /* use the safe status message */ }
+    throw new ApiError(detail, response.status)
   }
 
-  return (await response.json()) as CurrentUserResponse
+  return readJson<CurrentUserResponse>(response)
 }
 
 async function assessmentRequest<T>(path: string, accessToken: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
       ...init,
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -342,14 +343,15 @@ async function assessmentRequest<T>(path: string, accessToken: string, init?: Re
         ...init?.headers,
       },
     })
-  } catch {
-    throw new ApiError('Unable to reach the CodeProof API')
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    throw new ApiError('Unable to reach the CodeProof API. Confirm that the backend is running and VITE_API_BASE_URL points to it.')
   }
 
   if (!response.ok) {
     let detail = `CodeProof API returned HTTP ${response.status}`
     try {
-      const body = await response.json() as { detail?: unknown }
+      const body = await readJson<{ detail?: unknown }>(response)
       if (typeof body.detail === 'string') detail = body.detail
       else if (Array.isArray(body.detail)) {
         detail = body.detail.map(item => typeof item === 'object' && item && 'msg' in item ? String(item.msg) : 'Invalid request').join('; ')
@@ -361,20 +363,21 @@ async function assessmentRequest<T>(path: string, accessToken: string, init?: Re
   }
 
   if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  return readJson<T>(response)
 }
 
 async function fetchReport(path: string, accessToken: string): Promise<{ blob: Blob; filename: string }> {
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { headers: { Authorization: `Bearer ${accessToken}` } })
-  } catch {
-    throw new ApiError('Unable to reach the CodeProof API')
+    response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { headers: { Authorization: `Bearer ${accessToken}` } })
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    throw new ApiError('Unable to reach the CodeProof API. Confirm that the backend is running and VITE_API_BASE_URL points to it.')
   }
   if (!response.ok) {
     let message = `CodeProof API returned HTTP ${response.status}`
     try {
-      const body = await response.json() as { detail?: unknown }
+      const body = await readJson<{ detail?: unknown }>(response)
       if (typeof body.detail === 'string') message = body.detail
     } catch { /* retain generic response error */ }
     throw new ApiError(message, response.status)
